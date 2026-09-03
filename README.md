@@ -86,7 +86,7 @@ void user_package_handler(uint8_t cmd, uint8_t *data, uint16_t len)
 ### 3. 单接口初始化与解析
 
 ```c
-#include protoflow.h
+#include "protoflow.h"
 
 ParseContext uart1_ctx;
 uint8_t uart1_rx;
@@ -94,9 +94,9 @@ uint8_t uart1_rx;
 int main(void)
 {
     MX_USART1_UART_Init();
-    HAL_UART_Receive_IT(&huart1, &uart1_rx, 1);
 
     protoflow_init(&uart1_ctx);
+    HAL_UART_Receive_IT(&huart1, &uart1_rx, 1);
 
     while (1) {
         // 主循环
@@ -117,7 +117,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 一个接口定义一个 `ParseContext`，接收中断中必须把字节喂给对应实例：
 
 ```c
-#include protoflow.h
+#include "protoflow.h"
 
 ParseContext uart1_ctx;
 ParseContext uart2_ctx;
