@@ -66,8 +66,9 @@ protoflow.c
 发送函数会把整包数据交给底层通信接口发送：
 
 ```c
-void user_uart_transmit(uint8_t *data, uint16_t len)
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len)
 {
+    (void)ctx;
     HAL_UART_Transmit(&huart1, data, len, 100);
 }
 ```
@@ -75,8 +76,10 @@ void user_uart_transmit(uint8_t *data, uint16_t len)
 收到完整数据包后，库会调用应用回调：
 
 ```c
-void user_package_handler(uint8_t cmd, uint8_t *data, uint16_t len)
+void user_package_handler(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len)
 {
+    (void)ctx;
+    // ctx    : 数据包对应的解析实例
     // cmd    : 命令字
     // data   : 数据载荷
     // len    : 数据载荷长度
@@ -124,9 +127,22 @@ ParseContext uart2_ctx;
 uint8_t uart1_rx;
 uint8_t uart2_rx;
 
-void user_uart_transmit(uint8_t *data, uint16_t len)
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len)
 {
-    // 多发送口时，在此函数内按应用状态或目标通道路由到对应硬件
+    if (ctx == &uart1_ctx) {
+        HAL_UART_Transmit(&huart1, data, len, 100);
+    } else if (ctx == &uart2_ctx) {
+        HAL_UART_Transmit(&huart2, data, len, 100);
+    }
+}
+
+void user_package_handler(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len)
+{
+    if (ctx == &uart1_ctx) {
+        // 来自 UART1 的完整数据包
+    } else if (ctx == &uart2_ctx) {
+        // 来自 UART2 的完整数据包
+    }
 }
 
 int main(void)
@@ -163,7 +179,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 ```c
 uint8_t payload[4] = { 0x10, 0x20, 0x30, 0x40 };
-uint16_t sent_len = pack_data_transmit(0x01, payload, sizeof(payload));
+uint16_t sent_len = pack_data_transmit(&uart1_ctx, 0x01, payload, sizeof(payload));
 ```
 
 `pack_data_transmit()` 会完成以下工作：
@@ -174,9 +190,9 @@ uint16_t sent_len = pack_data_transmit(0x01, payload, sizeof(payload));
 4. 复制数据载荷
 5. 根据 `USE_CRC16` 写入 CRC16
 6. 写入帧尾
-7. 调用 `user_uart_transmit()` 发送完整数据包
+7. 通过 `user_uart_transmit(ctx, buffer, index)` 发送完整数据包
 
-返回值是实际写入发送缓冲区的总字节数。`pack_data_transmit()` 内部使用静态发送缓冲区，发送完成前不要修改传入的 `data`；如果应用层可能从多个线程或中断同时发送，需要自行保证发送过程互斥。
+第一个参数表示目标接口，传入哪个 `ParseContext`，发送时就会把同一个 `ctx` 交给 `user_uart_transmit()`。返回值是实际写入发送缓冲区的总字节数。`pack_data_transmit()` 内部使用静态发送缓冲区，发送完成前不要修改传入的 `data`；如果应用层可能从多个线程或中断同时发送，需要自行保证发送过程互斥。
 
 ## API 说明
 
@@ -195,24 +211,24 @@ void parse_byte(ParseContext *ctx, uint8_t byte);
 把一个接收字节喂入指定实例的解析器。收到完整、合法的数据包后，自动调用 `user_package_handler()`。
 
 ```c
-uint16_t pack_data_transmit(uint8_t cmd, uint8_t *data, uint16_t len);
+uint16_t pack_data_transmit(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len);
 ```
 
-打包并发送数据包。
+打包并发送数据包，发送时会把这个 `ctx` 原样传给 `user_uart_transmit()`，以便底层按接口路由。
 
 ### 用户必须实现的函数
 
 ```c
-void user_uart_transmit(uint8_t *data, uint16_t len);
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len);
 ```
 
-发送完整帧数据，底层可以是 UART、SPI、I2C 或其他通信接口。
+发送完整帧数据，底层可以是 UART、SPI、I2C 或其他通信接口。单接口可直接使用固定硬件；多接口时可依据 `ctx` 路由到对应硬件。
 
 ```c
-void user_package_handler(uint8_t cmd, uint8_t *data, uint16_t len);
+void user_package_handler(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len);
 ```
 
-处理收到的完整数据包。该回调在 `parse_byte()` 调用过程中同步触发，应保持简短，不要在回调中执行长延时或耗时任务。
+处理收到的完整数据包。`ctx` 表示数据包来源实例，可用于区分 UART1、UART2 等接口。该回调在 `parse_byte()` 调用过程中同步触发，应保持简短，不要在回调中执行长延时或耗时任务。
 
 ## 单实例升级到多实例
 
@@ -228,6 +244,14 @@ parse_byte(byte);       // 旧版
 ```c
 protoflow_init(&ctx);   // 新版
 parse_byte(&ctx, byte); // 新版
+pack_data_transmit(&ctx, cmd, data, len); // 新版发送
+```
+
+V1.2.0 起，用户发送函数和接收回调也携带 `ParseContext`：
+
+```c
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len);
+void user_package_handler(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len);
 ```
 
 迁移步骤：
@@ -236,7 +260,9 @@ parse_byte(&ctx, byte); // 新版
 2. 为每个通信接口声明一个 `ParseContext`
 3. 将旧 `protoflow_init()` 改为 `protoflow_init(&对应ctx)`
 4. 将旧 `parse_byte(byte)` 改为 `parse_byte(&对应ctx, byte)`
-5. 确认 `user_uart_transmit` 和 `user_package_handler` 仍由工程提供
+5. 将旧 `pack_data_transmit()` 改为 `pack_data_transmit(&对应ctx, ...)`
+6. 将 `user_uart_transmit` 和 `user_package_handler` 改为携带 `ctx` 的新签名，并在实现中按 `ctx` 路由或区分来源
+7. 确认这两个用户函数仍由工程提供
 
 ## 移植到其他通信接口
 
@@ -244,14 +270,16 @@ parse_byte(&ctx, byte); // 新版
 
 ```c
 // SPI
-void user_uart_transmit(uint8_t *data, uint16_t len)
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len)
 {
+    (void)ctx;
     HAL_SPI_Transmit(&hspi1, data, len, 100);
 }
 
 // I2C
-void user_uart_transmit(uint8_t *data, uint16_t len)
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len)
 {
+    (void)ctx;
     HAL_I2C_Master_Transmit(&hi2c1, DEVICE_ADDR, data, len, 100);
 }
 ```
@@ -264,8 +292,8 @@ void user_uart_transmit(uint8_t *data, uint16_t len)
 - 发送端和接收端必须使用相同的帧头、帧尾、长度规则和 CRC 开关
 - 接收字节可在中断中逐字节喂入 `parse_byte()`，函数本身不阻塞
 - `user_package_handler()` 在解析流程中被同步调用，应避免阻塞
-- 当前发送入口 `pack_data_transmit()` 不携带实例参数，多发送口场景需要在 `user_uart_transmit()` 内自行路由
-- 当前回调签名不包含来源 `ParseContext`；若应用需要区分数据来自哪个接口，可在协议命令或应用层数据中加入接口标识
+- `pack_data_transmit(&ctx, ...)` 会把这个 `ctx` 传给 `user_uart_transmit()`，多发送口场景应在发送函数中按 `ctx` 路由
+- `user_package_handler()` 会收到来源 `ParseContext`，应用可用指针比较或映射表区分数据来自哪个接口
 
 ## 许可证
 
