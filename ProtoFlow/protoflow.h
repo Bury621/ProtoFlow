@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    protoflow.h
   * @brief   Serial communication protocol library 
-  * @version V1.1.0
+  * @version V1.2.0
   ******************************************************************************
   */
 
@@ -50,10 +50,10 @@ typedef enum {
 } PkgStatus;
 
 // ==================== 用户必须实现的函数 ====================
-void user_uart_transmit(uint8_t *data, uint16_t len);
-void user_package_handler(uint8_t cmd, uint8_t *data, uint16_t len);
+void user_uart_transmit(ParseContext *ctx, uint8_t *data, uint16_t len);
+void user_package_handler(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len);
 
 // ==================== 库函数接口 ====================
 void protoflow_init(ParseContext *ctx);
 void parse_byte(ParseContext *ctx, uint8_t byte);
-uint16_t pack_data_transmit(uint8_t cmd, uint8_t *data, uint16_t len);
+uint16_t pack_data_transmit(ParseContext *ctx, uint8_t cmd, uint8_t *data, uint16_t len);
